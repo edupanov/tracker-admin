@@ -7,7 +7,7 @@ function hostedApi() {
 
 const state = {
   api: localStorage.getItem("enduro.admin.api") || hostedApi(),
-  bot: localStorage.getItem("enduro.admin.bot") || "",
+  clientId: localStorage.getItem("enduro.admin.client") || "9177209930",
   token: sessionStorage.getItem("enduro.admin.token") || "",
   role: sessionStorage.getItem("enduro.admin.role") || "",
   name: sessionStorage.getItem("enduro.admin.name") || "",
@@ -35,8 +35,6 @@ window.addEventListener("hashchange", () => {
   state.dialog = null;
   load();
 });
-window.onTelegramAuth = onTelegramAuth;
-
 load();
 setInterval(() => {
   if (!state.token || state.dialog || document.hidden) return;
@@ -135,9 +133,9 @@ function clearSession() {
   sessionStorage.removeItem("enduro.admin.name");
 }
 
-async function onTelegramAuth(user) {
+async function onTelegramIdToken(idToken) {
   try {
-    const data = await api("session", { login: user });
+    const data = await api("session", { id_token: idToken });
     state.token = data.token;
     state.role = data.role;
     state.name = data.name || "Администратор";
@@ -157,7 +155,6 @@ function render() {
   const focusId = document.activeElement?.id;
   const caret = document.activeElement?.selectionStart;
   root.innerHTML = state.token ? shell() : login();
-  if (!state.token) mountWidget();
   if (focusId) {
     const field = document.getElementById(focusId);
     if (field) {
@@ -173,10 +170,9 @@ function login() {
     <p class="muted">Вход только для владельца и администраторов. Проверка проходит на сервере, обычный пользователь приложения сюда не попадает.</p>
     <form id="login-form" class="stack">
       <label>Адрес admin-api<input id="api" name="api" value="${esc(state.api)}" placeholder="https://project.supabase.co/functions/v1/admin-api" required></label>
-      <label>Username бота<input id="bot" name="bot" value="${esc(state.bot)}" placeholder="enduro_tracker_bot" required></label>
-      <button class="button" type="submit">Сохранить и показать вход</button>
+      <label>Client ID<input id="client" name="client" value="${esc(state.clientId)}" inputmode="numeric" required></label>
+      <button class="button" type="button" data-action="telegram-login">Войти через Telegram</button>
     </form>
-    <div id="telegram-login"></div>
     ${state.error ? `<p class="error">${esc(state.error)}</p>` : ""}
   </main>`;
 }
@@ -477,30 +473,49 @@ function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char]));
 }
 
-function mountWidget() {
-  const host = document.querySelector("#telegram-login");
-  if (!host || !state.bot || !state.api) return;
-  const script = document.createElement("script");
-  script.async = true;
-  script.src = "https://telegram.org/js/telegram-widget.js?22";
-  script.setAttribute("data-telegram-login", state.bot.replace(/^@/, ""));
-  script.setAttribute("data-size", "large");
-  script.setAttribute("data-userpic", "false");
-  script.setAttribute("data-radius", "8");
-  script.setAttribute("data-onauth", "onTelegramAuth(user)");
-  host.appendChild(script);
+function loadTelegramLogin() {
+  if (window.Telegram && window.Telegram.Login) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://oauth.telegram.org/js/telegram-login.js?3";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Не удалось открыть вход Telegram."));
+    document.head.appendChild(script);
+  });
+}
+
+async function startTelegramLogin() {
+  const apiField = document.querySelector("#api");
+  const clientField = document.querySelector("#client");
+  state.api = apiField ? apiField.value.trim() : state.api;
+  state.clientId = clientField ? clientField.value.trim() : state.clientId;
+  localStorage.setItem("enduro.admin.api", state.api);
+  localStorage.setItem("enduro.admin.client", state.clientId);
+  if (!/^[1-9]\d{0,15}$/.test(state.clientId)) {
+    state.error = "Client ID — число из BotFather, раздел Login Widget.";
+    render();
+    return;
+  }
+  state.error = "";
+  try {
+    await loadTelegramLogin();
+    window.Telegram.Login.auth({ client_id: Number(state.clientId), scope: ["profile"], lang: "ru" }, (data) => {
+      if (!data || !data.id_token) {
+        state.error = (data && data.error) || "Вход в Telegram отменён.";
+        render();
+        return;
+      }
+      onTelegramIdToken(data.id_token);
+    });
+  } catch (error) {
+    state.error = error.message;
+    render();
+  }
 }
 
 function onSubmit(event) {
-  if (event.target.id === "login-form") {
-    event.preventDefault();
-    state.api = document.querySelector("#api").value.trim();
-    state.bot = document.querySelector("#bot").value.trim().replace(/^@/, "");
-    localStorage.setItem("enduro.admin.api", state.api);
-    localStorage.setItem("enduro.admin.bot", state.bot);
-    state.error = "";
-    render();
-  }
+  if (event.target.id === "login-form") event.preventDefault();
   if (event.target.id === "action-form") {
     event.preventDefault();
     commitDialog();
@@ -546,6 +561,10 @@ async function onClick(event) {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   const action = target.dataset.action;
+  if (action === "telegram-login") {
+    startTelegramLogin();
+    return;
+  }
   if (action === "logout") {
     clearSession();
     render();

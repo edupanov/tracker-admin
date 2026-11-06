@@ -87,7 +87,7 @@ async function loadCard() {
 
 async function loadAudit() {
   const data = await api("audit", {
-    action: state.audit.action,
+    auditAction: state.audit.action,
     actor: state.audit.actor,
     telegramId: state.audit.telegramId,
     limit: 50,
@@ -111,7 +111,7 @@ async function api(action, payload = {}) {
       "content-type": "application/json",
       ...(state.token ? { authorization: `Bearer ${state.token}` } : {}),
     },
-    body: JSON.stringify({ action, ...payload }),
+    body: JSON.stringify({ ...payload, action }),
   });
   const data = await response.json().catch(() => ({ ok: false, message: "Нет ответа сервера." }));
   if (response.status === 401 && action !== "session") {
